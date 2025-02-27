@@ -1,0 +1,95 @@
+services:
+  db:
+    image: postgres:14
+    container_name: db
+    restart: always
+    environment:
+      POSTGRES_USER: ${USER}
+      POSTGRES_PASSWORD: ${PASSWORD}
+      POSTGRES_DB: ${NAME}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/
+
+  web:
+    build: 
+      context: .
+    depends_on:
+      db:
+        condition: service_healthy
+    container_name: improvised-terminal
+    restart: always
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "python manage.py makemigrations &&
+             python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+
+  celery_worker:
+    build: 
+      context: .
+    container_name: celery_worker
+    command: celery -A improvised_terminal worker -l INFO
+    volumes: 
+      - .:/usr/src/app/
+    environment:
+      - CELERY_BROKER=amqp://admin:admin@rabbitmq:5672//
+      - CELERY_BACKEND=amqp://admin:admin@rabbitmq:5672//
+    depends_on:
+      - web
+      - rabbitmq
+
+  rabbitmq: 
+    image: rabbitmq:3.11-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  celery_beat:
+    build: 
+      context: .
+    container_name: celery-beat
+    command: celery -A improvised_terminal beat -l INFO
+    volumes:
+      - .:/usr/src/app/
+    depends_on:
+      - web
+      - rabbitmq
+
+  celery_flower:
+    build: 
+      context: .
+    command: celery -A improvised_terminal flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - web
+      - rabbitmq
+    volumes:
+      - .:/usr/src/app/
+
+  test:
+    build: 
+      context: .
+    command: >
+      sh -c "pytest"
+    depends_on:
+      - web
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    container_name: django-Test
+    restart: 'no'
+
+volumes:
+  pgdata: 
